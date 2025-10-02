@@ -8,7 +8,15 @@
     "dev": "nodemon src/server.js",
     "test": "jest",
     "lint": "eslint src/",
-    "lint:fix": "eslint src/ --fix"
+    "lint:fix": "eslint src/ --fix",
+    "docker:build": "docker build -t lens-backend .",
+    "docker:run": "docker run -p 5000:5000 --env-file .env lens-backend",
+    "docker:dev": "docker-compose up --build",
+    "docker:prod": "docker-compose -f docker-compose.yml -f docker-compose.prod.yml up --build",
+    "setup": "./scripts/setup.sh",
+    "setup:env": "node scripts/env-setup.js",
+    "setup:secrets": "node scripts/env-setup.js --generate-secrets",
+    "setup:full": "npm run setup && npm run setup:env"
   },
   "keywords": ["photography", "portfolio", "api", "mongodb"],
   "author": "Your Name",

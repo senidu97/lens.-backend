@@ -1,0 +1,160 @@
+version: '3.8'
+
+services:
+  # MongoDB Database (Using Atlas Cloud - no local container needed)
+  # mongodb:
+  #   image: mongo:7.0
+  #   container_name: lens-mongodb-prod
+  #   restart: always
+  #   ports:
+  #     - "27017:27017"
+  #   environment:
+  #     MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME}
+  #     MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+  #     MONGO_INITDB_DATABASE: lens-portfolio
+  #   volumes:
+  #     - mongodb_prod_data:/data/db
+  #     - ./scripts/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+  #   networks:
+  #     - lens-network
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         memory: 1G
+  #       reservations:
+  #         memory: 512M
+
+  # Redis for caching
+  redis:
+    image: redis:7-alpine
+    container_name: lens-redis-prod
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_prod_data:/data
+    networks:
+      - lens-network
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
+
+  # Lens Backend API (Production)
+  backend:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: lens-backend-prod
+    restart: always
+    ports:
+      - "5000:5000"
+    environment:
+      # Server Configuration
+      - NODE_ENV=production
+      - PORT=5000
+      - HOST=0.0.0.0
+      
+      # Database (Atlas Cloud)
+      - MONGODB_URI=${MONGODB_URI}
+      - MONGODB_MAX_POOL_SIZE=${MONGODB_MAX_POOL_SIZE:-10}
+      - MONGODB_SERVER_SELECTION_TIMEOUT=${MONGODB_SERVER_SELECTION_TIMEOUT:-5000}
+      - MONGODB_CONNECT_TIMEOUT=${MONGODB_CONNECT_TIMEOUT:-10000}
+      - MONGODB_SOCKET_TIMEOUT=${MONGODB_SOCKET_TIMEOUT:-45000}
+      
+      # Redis
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      
+      # JWT Configuration
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET}
+      
+      # R2 Configuration (Primary Storage)
+      - R2_ACCOUNT_ID=${R2_ACCOUNT_ID}
+      - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID}
+      - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY}
+      - R2_BUCKET_NAME=${R2_BUCKET_NAME}
+      - R2_PUBLIC_URL=${R2_PUBLIC_URL}
+      - R2_REGION=${R2_REGION:-auto}
+      - R2_STORAGE_CLASS=${R2_STORAGE_CLASS:-STANDARD}
+      - R2_CACHE_CONTROL=${R2_CACHE_CONTROL:-max-age=31536000}
+      - R2_USE_CDN=${R2_USE_CDN:-true}
+      - R2_CDN_CUSTOM_DOMAIN=${R2_CDN_CUSTOM_DOMAIN}
+      - R2_ENABLE_IMAGE_TRANSFORMATIONS=${R2_ENABLE_IMAGE_TRANSFORMATIONS:-true}
+      
+      # Cloudinary Configuration (Backup/Fallback)
+      - CLOUDINARY_CLOUD_NAME=${CLOUDINARY_CLOUD_NAME}
+      - CLOUDINARY_API_KEY=${CLOUDINARY_API_KEY}
+      - CLOUDINARY_API_SECRET=${CLOUDINARY_API_SECRET}
+      - CLOUDINARY_SECURE=${CLOUDINARY_SECURE:-true}
+      
+      # Frontend Configuration
+      - FRONTEND_URL=${FRONTEND_URL}
+      - FRONTEND_PROD_URL=${FRONTEND_PROD_URL}
+      
+      # File Upload Configuration
+      - MAX_FILE_SIZE=${MAX_FILE_SIZE:-10485760}
+      - MAX_AVATAR_SIZE=${MAX_AVATAR_SIZE:-5242880}
+      - MAX_COVER_PHOTO_SIZE=${MAX_COVER_PHOTO_SIZE:-10485760}
+      - IMAGE_QUALITY=${IMAGE_QUALITY:-85}
+      - IMAGE_MAX_WIDTH=${IMAGE_MAX_WIDTH:-2048}
+      - IMAGE_MAX_HEIGHT=${IMAGE_MAX_HEIGHT:-2048}
+      - THUMBNAIL_SIZE=${THUMBNAIL_SIZE:-300}
+      - AVATAR_SIZE=${AVATAR_SIZE:-400}
+      
+      # Rate Limiting
+      - RATE_LIMIT_WINDOW_MS=${RATE_LIMIT_WINDOW_MS:-900000}
+      - RATE_LIMIT_MAX_REQUESTS=${RATE_LIMIT_MAX_REQUESTS:-100}
+      
+      # Security
+      - SECURITY_HEADERS_ENABLED=${SECURITY_HEADERS_ENABLED:-true}
+      - HELMET_CSP_ENABLED=${HELMET_CSP_ENABLED:-true}
+      
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOG_FORMAT=${LOG_FORMAT:-combined}
+      
+      # Analytics
+      - ANALYTICS_ENABLED=${ANALYTICS_ENABLED:-true}
+      - TRACK_VIEWS=${TRACK_VIEWS:-true}
+      - TRACK_DOWNLOADS=${TRACK_DOWNLOADS:-true}
+      - TRACK_SHARES=${TRACK_SHARES:-true}
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      - redis
+    networks:
+      - lens-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+
+  # Nginx Reverse Proxy (Optional)
+  nginx:
+    image: nginx:alpine
+    container_name: lens-nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - backend
+    networks:
+      - lens-network
+
+volumes:
+  redis_prod_data:
+
+networks:
+  lens-network:
+    driver: bridge
