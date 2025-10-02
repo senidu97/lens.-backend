@@ -33,7 +33,7 @@ const portfolioSchema = new mongoose.Schema({
     default: false
   },
   coverPhoto: {
-    type: String, // Cloudinary URL
+    type: String, // R2 URL
     default: null
   },
   layout: {
@@ -155,6 +155,18 @@ const portfolioSchema = new mongoose.Schema({
       'other'
     ],
     default: 'other'
+  },
+  // R2 specific fields for cover photo
+  r2: {
+    coverPhotoKey: String, // R2 key for cover photo
+    bucket: {
+      type: String,
+      default: process.env.R2_BUCKET_NAME
+    },
+    region: {
+      type: String,
+      default: process.env.R2_REGION || 'auto'
+    }
   }
 }, {
   timestamps: true,
@@ -169,6 +181,7 @@ portfolioSchema.index({ isPublic: 1 });
 portfolioSchema.index({ tags: 1 });
 portfolioSchema.index({ category: 1 });
 portfolioSchema.index({ 'analytics.totalViews': -1 });
+portfolioSchema.index({ 'r2.coverPhotoKey': 1 });
 
 // Virtual for photo count
 portfolioSchema.virtual('photoCount', {
@@ -184,6 +197,11 @@ portfolioSchema.virtual('url').get(function() {
     return `https://${this.customDomain}`;
   }
   return `${process.env.FRONTEND_URL}/portfolio/${this.slug}`;
+});
+
+// Virtual for cover photo CDN URL
+portfolioSchema.virtual('coverPhotoCdnUrl').get(function() {
+  return this.coverPhoto; // R2 public URL is already a CDN URL
 });
 
 // Pre-save middleware to generate slug
@@ -228,6 +246,25 @@ portfolioSchema.methods.canAccess = function(user) {
   
   // Private portfolios can only be accessed by the owner
   return user && user._id.toString() === this.user.toString();
+};
+
+// Instance method to get cover photo CDN URL with transformations
+portfolioSchema.methods.getCoverPhotoCDNUrl = function(transformations = {}) {
+  if (!this.coverPhoto) return null;
+  
+  if (Object.keys(transformations).length === 0) {
+    return this.coverPhoto;
+  }
+
+  // For R2, you can use Cloudflare Images or custom transformations
+  const params = new URLSearchParams();
+  
+  if (transformations.width) params.append('width', transformations.width);
+  if (transformations.height) params.append('height', transformations.height);
+  if (transformations.quality) params.append('quality', transformations.quality);
+  if (transformations.format) params.append('format', transformations.format);
+  
+  return params.toString() ? `${this.coverPhoto}?${params.toString()}` : this.coverPhoto;
 };
 
 // Static method to find public portfolios
@@ -279,6 +316,11 @@ portfolioSchema.statics.search = function(query, options = {}) {
     .sort(sort)
     .limit(limit)
     .skip(skip);
+};
+
+// Static method to find portfolios by R2 cover photo keys
+portfolioSchema.statics.findByCoverPhotoKeys = function(keys) {
+  return this.find({ 'r2.coverPhotoKey': { $in: keys } });
 };
 
 // Pre-remove middleware to clean up related data

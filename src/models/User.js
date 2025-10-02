@@ -119,7 +119,28 @@ const userSchema = new mongoose.Schema({
       default: Date.now,
       expires: 2592000 // 30 days
     }
-  }]
+  }],
+  // Social features
+  following: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }],
+  followers: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }],
+  // R2 specific fields for avatar
+  r2: {
+    avatarKey: String, // R2 key for avatar
+    bucket: {
+      type: String,
+      default: process.env.R2_BUCKET_NAME
+    },
+    region: {
+      type: String,
+      default: process.env.R2_REGION || 'auto'
+    }
+  }
 }, {
   timestamps: true,
   toJSON: { virtuals: true },
@@ -130,6 +151,7 @@ const userSchema = new mongoose.Schema({
 userSchema.index({ email: 1 });
 userSchema.index({ username: 1 });
 userSchema.index({ 'subscription.plan': 1 });
+userSchema.index({ 'r2.avatarKey': 1 });
 
 // Virtual for full name
 userSchema.virtual('fullName').get(function() {
@@ -142,6 +164,11 @@ userSchema.virtual('fullName').get(function() {
 // Virtual for display name
 userSchema.virtual('displayName').get(function() {
   return this.fullName || this.username;
+});
+
+// Virtual for avatar CDN URL
+userSchema.virtual('avatarCdnUrl').get(function() {
+  return this.avatar; // R2 public URL is already a CDN URL
 });
 
 // Pre-save middleware to hash password
@@ -208,6 +235,25 @@ userSchema.methods.canUploadPhoto = function() {
   return this.stats.totalPhotos < planLimits[this.subscription.plan];
 };
 
+// Instance method to get avatar CDN URL with transformations
+userSchema.methods.getAvatarCDNUrl = function(transformations = {}) {
+  if (!this.avatar) return null;
+  
+  if (Object.keys(transformations).length === 0) {
+    return this.avatar;
+  }
+
+  // For R2, you can use Cloudflare Images or custom transformations
+  const params = new URLSearchParams();
+  
+  if (transformations.width) params.append('width', transformations.width);
+  if (transformations.height) params.append('height', transformations.height);
+  if (transformations.quality) params.append('quality', transformations.quality);
+  if (transformations.format) params.append('format', transformations.format);
+  
+  return params.toString() ? `${this.avatar}?${params.toString()}` : this.avatar;
+};
+
 // Static method to find user by email or username
 userSchema.statics.findByEmailOrUsername = function(identifier) {
   return this.findOne({
@@ -218,12 +264,29 @@ userSchema.statics.findByEmailOrUsername = function(identifier) {
   });
 };
 
+// Static method to find users by R2 avatar keys
+userSchema.statics.findByAvatarKeys = function(keys) {
+  return this.find({ 'r2.avatarKey': { $in: keys } });
+};
+
 // Pre-remove middleware to clean up related data
 userSchema.pre('remove', async function(next) {
   try {
     // Remove user's portfolios and photos
     await this.model('Portfolio').deleteMany({ user: this._id });
     await this.model('Photo').deleteMany({ user: this._id });
+    
+    // Remove user from following/followers lists
+    await this.model('User').updateMany(
+      { following: this._id },
+      { $pull: { following: this._id } }
+    );
+    
+    await this.model('User').updateMany(
+      { followers: this._id },
+      { $pull: { followers: this._id } }
+    );
+    
     next();
   } catch (error) {
     next(error);

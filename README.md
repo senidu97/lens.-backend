@@ -1,6 +1,6 @@
 # Lens. Backend API
 
-A comprehensive Node.js backend API for the Lens. photography portfolio platform, built with Express.js and MongoDB.
+A comprehensive Node.js backend API for the Lens. photography portfolio platform, built with Express.js, MongoDB, and Cloudflare R2 for image storage.
 
 ## Features
 
@@ -9,7 +9,7 @@ A comprehensive Node.js backend API for the Lens. photography portfolio platform
 - **Portfolio Management**: Create, update, and manage photography portfolios
 - **Photo Management**: Upload, organize, and manage photos with metadata
 - **Image Processing**: Automatic image optimization and thumbnail generation
-- **Cloud Storage**: Cloudinary integration for image storage and CDN
+- **Cloud Storage**: Cloudflare R2 integration for image storage and CDN
 - **Search & Discovery**: Advanced search functionality for portfolios and photos
 - **Analytics**: View tracking and basic analytics
 - **Rate Limiting**: API rate limiting and security measures
@@ -22,7 +22,7 @@ A comprehensive Node.js backend API for the Lens. photography portfolio platform
 - **Database**: MongoDB with Mongoose ODM
 - **Authentication**: JWT (JSON Web Tokens)
 - **Image Processing**: Sharp
-- **Cloud Storage**: Cloudinary
+- **Cloud Storage**: Cloudflare R2 (S3-compatible)
 - **Validation**: Express Validator
 - **Security**: Helmet, CORS, Rate Limiting
 
@@ -30,7 +30,7 @@ A comprehensive Node.js backend API for the Lens. photography portfolio platform
 
 - Node.js (v18 or higher)
 - MongoDB (v5 or higher)
-- Cloudinary account
+- Cloudflare R2 bucket
 - npm or yarn
 
 ## Installation
@@ -38,7 +38,7 @@ A comprehensive Node.js backend API for the Lens. photography portfolio platform
 1. **Clone the repository**
    ```bash
    git clone <repository-url>
-   cd lens-backend
+   cd lens.-backend
    ```
 
 2. **Install dependencies**
@@ -66,10 +66,13 @@ A comprehensive Node.js backend API for the Lens. photography portfolio platform
    JWT_REFRESH_SECRET=your-refresh-secret-key-here
    JWT_REFRESH_EXPIRE=30d
    
-   # Cloudinary Configuration
-   CLOUDINARY_CLOUD_NAME=your-cloud-name
-   CLOUDINARY_API_KEY=your-api-key
-   CLOUDINARY_API_SECRET=your-api-secret
+   # Cloudflare R2 Configuration
+   R2_ACCOUNT_ID=your-cloudflare-account-id
+   R2_ACCESS_KEY_ID=your-r2-access-key-id
+   R2_SECRET_ACCESS_KEY=your-r2-secret-access-key
+   R2_BUCKET_NAME=your-bucket-name
+   R2_PUBLIC_URL=https://your-bucket-name.your-account-id.r2.cloudflarestorage.com
+   R2_REGION=auto
    
    # Frontend URL
    FRONTEND_URL=http://localhost:3000
@@ -79,6 +82,33 @@ A comprehensive Node.js backend API for the Lens. photography portfolio platform
    ```bash
    npm run dev
    ```
+
+## Cloudflare R2 Setup
+
+### 1. Create R2 Bucket
+1. Go to Cloudflare Dashboard → R2 Object Storage
+2. Create a new bucket
+3. Note the bucket name and account ID
+
+### 2. Configure Public Access
+1. Go to your bucket settings
+2. Enable public access
+3. Note the public URL format: `https://your-bucket-name.your-account-id.r2.cloudflarestorage.com`
+
+### 3. Create API Token
+1. Go to Cloudflare Dashboard → My Profile → API Tokens
+2. Create a custom token with R2 permissions
+3. Note the Access Key ID and Secret Access Key
+
+### 4. Environment Variables
+```env
+R2_ACCOUNT_ID=your-cloudflare-account-id
+R2_ACCESS_KEY_ID=your-r2-access-key-id
+R2_SECRET_ACCESS_KEY=your-r2-secret-access-key
+R2_BUCKET_NAME=your-bucket-name
+R2_PUBLIC_URL=https://your-bucket-name.your-account-id.r2.cloudflarestorage.com
+R2_REGION=auto
+```
 
 ## API Endpoints
 
@@ -129,12 +159,15 @@ A comprehensive Node.js backend API for the Lens. photography portfolio platform
 - `GET /api/photos/:id/analytics` - Get photo analytics
 - `PUT /api/photos/reorder` - Reorder photos
 
-### Upload
-- `POST /api/upload/photo` - Upload single photo
-- `POST /api/upload/photos` - Upload multiple photos
-- `POST /api/upload/avatar` - Upload avatar
-- `DELETE /api/upload/photo/:id` - Delete photo from cloud
+### Upload (R2 Integration)
+- `POST /api/upload/photo` - Upload single photo to R2
+- `POST /api/upload/photos` - Upload multiple photos to R2
+- `POST /api/upload/avatar` - Upload avatar to R2
+- `DELETE /api/upload/photo/:id` - Delete photo from R2
+- `POST /api/upload/presigned-url` - Get presigned upload URL
+- `POST /api/upload/download-url` - Get presigned download URL
 - `GET /api/upload/limits` - Get upload limits
+- `GET /api/upload/config` - Get R2 configuration
 
 ## Database Models
 
@@ -144,6 +177,7 @@ A comprehensive Node.js backend API for the Lens. photography portfolio platform
 - Subscription and preferences
 - Statistics and analytics
 - Social features (following/followers)
+- R2 avatar storage
 
 ### Portfolio
 - Portfolio metadata
@@ -151,13 +185,45 @@ A comprehensive Node.js backend API for the Lens. photography portfolio platform
 - SEO configuration
 - Analytics and view tracking
 - Public/private visibility
+- R2 cover photo storage
 
 ### Photo
 - Photo metadata and EXIF data
-- Cloud storage URLs
+- R2 storage URLs and keys
 - Analytics and engagement
 - Organization and categorization
 - Processing status
+- Color palette extraction
+
+## R2 Integration Features
+
+### Image Processing
+- **Automatic Optimization**: Images are automatically optimized for web
+- **Thumbnail Generation**: Automatic thumbnail creation
+- **Format Conversion**: Support for multiple image formats
+- **Color Extraction**: Dominant color palette extraction
+- **Metadata Preservation**: EXIF data preservation and extraction
+
+### Storage Structure
+```
+bucket/
+├── photos/
+│   └── {userId}/
+│       ├── {timestamp}_{fileId}.jpg
+│       └── {timestamp}_{fileId}_thumb.jpg
+├── avatars/
+│   └── {userId}/
+│       └── {timestamp}_{fileId}.jpg
+└── cover-photos/
+    └── {userId}/
+        └── {timestamp}_{fileId}.jpg
+```
+
+### CDN Integration
+- R2 public URLs serve as CDN endpoints
+- Automatic image optimization
+- Global edge caching
+- Custom domain support
 
 ## Security Features
 
@@ -168,14 +234,7 @@ A comprehensive Node.js backend API for the Lens. photography portfolio platform
 - **CORS Protection**: Cross-origin resource sharing configuration
 - **Helmet Security**: Security headers and protection
 - **File Upload Security**: File type and size validation
-
-## Image Processing
-
-- **Automatic Optimization**: Images are automatically optimized for web
-- **Thumbnail Generation**: Automatic thumbnail creation
-- **Format Conversion**: Support for multiple image formats
-- **Color Extraction**: Dominant color palette extraction
-- **Metadata Preservation**: EXIF data preservation and extraction
+- **R2 Security**: Secure presigned URLs for uploads
 
 ## Subscription Plans
 
@@ -201,7 +260,7 @@ The API includes comprehensive error handling with:
 - Authorization errors
 - Database errors
 - File upload errors
-- Cloudinary errors
+- R2 storage errors
 
 ## Rate Limiting
 
@@ -224,7 +283,7 @@ src/
 ├── models/          # MongoDB models
 ├── routes/          # API routes
 ├── middleware/      # Custom middleware
-├── utils/           # Utility functions
+├── utils/           # Utility functions (R2 integration)
 └── server.js        # Main server file
 ```
 
@@ -236,7 +295,7 @@ Ensure all required environment variables are set in production:
 - `NODE_ENV=production`
 - `MONGODB_URI` - Production MongoDB connection string
 - `JWT_SECRET` - Strong JWT secret
-- `CLOUDINARY_*` - Cloudinary configuration
+- `R2_*` - Cloudflare R2 configuration
 - `FRONTEND_URL` - Production frontend URL
 
 ### Production Considerations
@@ -246,6 +305,27 @@ Ensure all required environment variables are set in production:
 - Set up monitoring and alerting
 - Use HTTPS in production
 - Configure proper CORS settings
+- Set up R2 bucket policies for production
+
+## R2 Best Practices
+
+### File Organization
+- Use consistent naming conventions
+- Organize files by user and type
+- Include timestamps for uniqueness
+- Store metadata in database, not file names
+
+### Performance
+- Use appropriate image sizes
+- Generate thumbnails for faster loading
+- Implement lazy loading
+- Use CDN for global distribution
+
+### Security
+- Validate file types and sizes
+- Use presigned URLs for uploads
+- Implement proper access controls
+- Monitor usage and costs
 
 ## Contributing
 

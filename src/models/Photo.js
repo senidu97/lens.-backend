@@ -25,8 +25,8 @@ const photoSchema = new mongoose.Schema({
     required: [true, 'Photo URL is required']
   },
   publicId: {
-    type: String, // Cloudinary public ID
-    required: [true, 'Public ID is required']
+    type: String, // R2 key
+    required: [true, 'Public ID (R2 key) is required']
   },
   thumbnail: {
     type: String, // Thumbnail URL
@@ -166,6 +166,23 @@ const photoSchema = new mongoose.Schema({
     },
     error: String,
     processedAt: Date
+  },
+  // R2 specific fields
+  r2: {
+    bucket: {
+      type: String,
+      default: process.env.R2_BUCKET_NAME
+    },
+    region: {
+      type: String,
+      default: process.env.R2_REGION || 'auto'
+    },
+    etag: String, // R2 ETag for integrity checking
+    lastModified: Date,
+    storageClass: {
+      type: String,
+      default: 'STANDARD'
+    }
   }
 }, {
   timestamps: true,
@@ -183,6 +200,7 @@ photoSchema.index({ 'analytics.views': -1 });
 photoSchema.index({ 'analytics.likes': -1 });
 photoSchema.index({ createdAt: -1 });
 photoSchema.index({ order: 1 });
+photoSchema.index({ publicId: 1 }); // Index for R2 key lookups
 
 // Virtual for aspect ratio
 photoSchema.virtual('aspectRatio').get(function() {
@@ -205,6 +223,16 @@ photoSchema.virtual('dominantColor').get(function() {
     return this.colorPalette[0].color;
   }
   return null;
+});
+
+// Virtual for R2 CDN URL with transformations
+photoSchema.virtual('cdnUrl').get(function() {
+  return this.url; // R2 public URL is already a CDN URL
+});
+
+// Virtual for thumbnail CDN URL
+photoSchema.virtual('thumbnailCdnUrl').get(function() {
+  return this.thumbnail;
 });
 
 // Pre-save middleware to generate alt text if not provided
@@ -241,8 +269,8 @@ photoSchema.pre('remove', async function(next) {
       { $inc: { 'stats.totalPhotos': -1 } }
     );
     
-    // TODO: Delete from Cloudinary
-    // await cloudinary.uploader.destroy(this.publicId);
+    // Note: R2 cleanup is handled in the upload route
+    // This ensures proper error handling and logging
     
     next();
   } catch (error) {
@@ -276,6 +304,30 @@ photoSchema.methods.canAccess = function(user) {
   
   // Private photos can only be accessed by the owner
   return user && user._id.toString() === this.user.toString();
+};
+
+// Instance method to get R2 key for thumbnail
+photoSchema.methods.getThumbnailKey = function() {
+  // Assuming thumbnail follows the pattern: original_key_thumb.jpg
+  return this.publicId.replace('.jpg', '_thumb.jpg');
+};
+
+// Instance method to get CDN URL with transformations
+photoSchema.methods.getCDNUrl = function(transformations = {}) {
+  if (Object.keys(transformations).length === 0) {
+    return this.url;
+  }
+
+  // For R2, you can use Cloudflare Images or custom transformations
+  // This is a basic implementation
+  const params = new URLSearchParams();
+  
+  if (transformations.width) params.append('width', transformations.width);
+  if (transformations.height) params.append('height', transformations.height);
+  if (transformations.quality) params.append('quality', transformations.quality);
+  if (transformations.format) params.append('format', transformations.format);
+  
+  return params.toString() ? `${this.url}?${params.toString()}` : this.url;
 };
 
 // Static method to find public photos
@@ -373,6 +425,16 @@ photoSchema.statics.findTrending = function(limit = 10, days = 7) {
     .populate('portfolio', 'title slug')
     .sort({ 'analytics.views': -1 })
     .limit(limit);
+};
+
+// Static method to find photos by R2 key
+photoSchema.statics.findByR2Key = function(key) {
+  return this.findOne({ publicId: key });
+};
+
+// Static method to get photos by R2 keys (batch lookup)
+photoSchema.statics.findByR2Keys = function(keys) {
+  return this.find({ publicId: { $in: keys } });
 };
 
 module.exports = mongoose.model('Photo', photoSchema);

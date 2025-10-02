@@ -1,21 +1,20 @@
 const express = require('express');
 const multer = require('multer');
-const sharp = require('sharp');
-const cloudinary = require('cloudinary').v2;
 const { v4: uuidv4 } = require('uuid');
 const Photo = require('../models/Photo');
 const Portfolio = require('../models/Portfolio');
+const User = require('../models/User');
 const { protect, checkSubscriptionLimits } = require('../middleware/auth');
 const { validateObjectId } = require('../middleware/validation');
+const {
+  processAndUploadImage,
+  uploadAvatar,
+  deleteFromR2,
+  generatePresignedUploadUrl,
+  generatePresignedDownloadUrl,
+} = require('../utils/r2');
 
 const router = express.Router();
-
-// Configure Cloudinary
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET
-});
 
 // Configure multer for memory storage
 const storage = multer.memoryStorage();
@@ -40,72 +39,6 @@ const upload = multer({
     files: 10 // Maximum 10 files per request
   }
 });
-
-// Helper function to upload to Cloudinary
-const uploadToCloudinary = async (buffer, options = {}) => {
-  return new Promise((resolve, reject) => {
-    cloudinary.uploader.upload_stream(
-      {
-        resource_type: 'image',
-        folder: 'lens-portfolio',
-        public_id: options.publicId || uuidv4(),
-        transformation: options.transformation || [],
-        ...options
-      },
-      (error, result) => {
-        if (error) {
-          reject(error);
-        } else {
-          resolve(result);
-        }
-      }
-    ).end(buffer);
-  });
-};
-
-// Helper function to generate thumbnail
-const generateThumbnail = async (buffer, width = 300, height = 300) => {
-  return await sharp(buffer)
-    .resize(width, height, {
-      fit: 'cover',
-      position: 'center'
-    })
-    .jpeg({ quality: 80 })
-    .toBuffer();
-};
-
-// Helper function to extract dominant colors
-const extractColors = async (buffer) => {
-  try {
-    const { data, info } = await sharp(buffer)
-      .resize(150, 150)
-      .raw()
-      .toBuffer({ resolveWithObject: true });
-
-    const colors = {};
-    const step = info.channels;
-
-    for (let i = 0; i < data.length; i += step) {
-      const r = data[i];
-      const g = data[i + 1];
-      const b = data[i + 2];
-      const color = `rgb(${r},${g},${b})`;
-      colors[color] = (colors[color] || 0) + 1;
-    }
-
-    // Sort colors by frequency and return top 5
-    return Object.entries(colors)
-      .sort(([, a], [, b]) => b - a)
-      .slice(0, 5)
-      .map(([color, count]) => ({
-        color,
-        percentage: Math.round((count / (data.length / step)) * 100)
-      }));
-  } catch (error) {
-    console.error('Error extracting colors:', error);
-    return [];
-  }
-};
 
 // @desc    Upload single photo
 // @route   POST /api/upload/photo
@@ -153,42 +86,18 @@ router.post('/photo', protect, checkSubscriptionLimits('photos'), upload.single(
       });
     }
 
-    // Generate unique public ID
-    const publicId = `${req.user._id}_${uuidv4()}`;
-
-    // Process image with Sharp
-    const processedImage = await sharp(req.file.buffer)
-      .resize(2048, 2048, {
-        fit: 'inside',
-        withoutEnlargement: true
-      })
-      .jpeg({ quality: 85 })
-      .toBuffer();
-
-    // Generate thumbnail
-    const thumbnailBuffer = await generateThumbnail(req.file.buffer);
-
-    // Extract colors
-    const colorPalette = await extractColors(req.file.buffer);
-
-    // Upload original image to Cloudinary
-    const originalResult = await uploadToCloudinary(processedImage, {
-      publicId: `${publicId}_original`,
-      transformation: [
-        { quality: 'auto', fetch_format: 'auto' }
-      ]
+    // Process and upload image to R2
+    const uploadResult = await processAndUploadImage(req.file.buffer, {
+      userId: req.user._id,
+      folder: 'photos',
+      originalName: req.file.originalname,
+      quality: 85,
+      maxWidth: 2048,
+      maxHeight: 2048,
+      generateThumbnail: true,
+      thumbnailSize: 300,
+      extractColors: true,
     });
-
-    // Upload thumbnail to Cloudinary
-    const thumbnailResult = await uploadToCloudinary(thumbnailBuffer, {
-      publicId: `${publicId}_thumb`,
-      transformation: [
-        { width: 300, height: 300, crop: 'fill', quality: 'auto' }
-      ]
-    });
-
-    // Get image metadata
-    const metadata = await sharp(req.file.buffer).metadata();
 
     // Parse tags
     const tagArray = tags ? tags.split(',').map(tag => tag.trim()) : [];
@@ -199,19 +108,19 @@ router.post('/photo', protect, checkSubscriptionLimits('photos'), upload.single(
       portfolio: portfolioId,
       title: title || req.file.originalname.split('.')[0],
       description,
-      url: originalResult.secure_url,
-      publicId: originalResult.public_id,
-      thumbnail: thumbnailResult.secure_url,
+      url: uploadResult.mainImage.url,
+      publicId: uploadResult.mainImage.key, // Store R2 key as publicId
+      thumbnail: uploadResult.thumbnail.url,
       metadata: {
-        width: metadata.width,
-        height: metadata.height,
-        format: metadata.format,
-        size: req.file.size
+        width: uploadResult.mainImage.width,
+        height: uploadResult.mainImage.height,
+        format: uploadResult.mainImage.format,
+        size: uploadResult.mainImage.size
       },
       tags: tagArray,
       category: category || 'other',
       isPublic,
-      colorPalette
+      colorPalette: uploadResult.colorPalette
     });
 
     // Populate photo with user and portfolio data
@@ -286,58 +195,36 @@ router.post('/photos', protect, checkSubscriptionLimits('photos'), upload.array(
     for (let i = 0; i < req.files.length; i++) {
       try {
         const file = req.files[i];
-        const publicId = `${req.user._id}_${uuidv4()}`;
 
-        // Process image with Sharp
-        const processedImage = await sharp(file.buffer)
-          .resize(2048, 2048, {
-            fit: 'inside',
-            withoutEnlargement: true
-          })
-          .jpeg({ quality: 85 })
-          .toBuffer();
-
-        // Generate thumbnail
-        const thumbnailBuffer = await generateThumbnail(file.buffer);
-
-        // Extract colors
-        const colorPalette = await extractColors(file.buffer);
-
-        // Upload original image to Cloudinary
-        const originalResult = await uploadToCloudinary(processedImage, {
-          publicId: `${publicId}_original`,
-          transformation: [
-            { quality: 'auto', fetch_format: 'auto' }
-          ]
+        // Process and upload image to R2
+        const uploadResult = await processAndUploadImage(file.buffer, {
+          userId: req.user._id,
+          folder: 'photos',
+          originalName: file.originalname,
+          quality: 85,
+          maxWidth: 2048,
+          maxHeight: 2048,
+          generateThumbnail: true,
+          thumbnailSize: 300,
+          extractColors: true,
         });
-
-        // Upload thumbnail to Cloudinary
-        const thumbnailResult = await uploadToCloudinary(thumbnailBuffer, {
-          publicId: `${publicId}_thumb`,
-          transformation: [
-            { width: 300, height: 300, crop: 'fill', quality: 'auto' }
-          ]
-        });
-
-        // Get image metadata
-        const metadata = await sharp(file.buffer).metadata();
 
         // Create photo record
         const photo = await Photo.create({
           user: req.user._id,
           portfolio: portfolioId,
           title: file.originalname.split('.')[0],
-          url: originalResult.secure_url,
-          publicId: originalResult.public_id,
-          thumbnail: thumbnailResult.secure_url,
+          url: uploadResult.mainImage.url,
+          publicId: uploadResult.mainImage.key,
+          thumbnail: uploadResult.thumbnail.url,
           metadata: {
-            width: metadata.width,
-            height: metadata.height,
-            format: metadata.format,
-            size: file.size
+            width: uploadResult.mainImage.width,
+            height: uploadResult.mainImage.height,
+            format: uploadResult.mainImage.format,
+            size: uploadResult.mainImage.size
           },
           isPublic,
-          colorPalette,
+          colorPalette: uploadResult.colorPalette,
           order: i
         });
 
@@ -382,30 +269,13 @@ router.post('/avatar', protect, upload.single('avatar'), async (req, res, next) 
       });
     }
 
-    // Generate unique public ID
-    const publicId = `avatar_${req.user._id}_${uuidv4()}`;
-
-    // Process image with Sharp (square crop)
-    const processedImage = await sharp(req.file.buffer)
-      .resize(400, 400, {
-        fit: 'cover',
-        position: 'center'
-      })
-      .jpeg({ quality: 90 })
-      .toBuffer();
-
-    // Upload to Cloudinary
-    const result = await uploadToCloudinary(processedImage, {
-      publicId,
-      transformation: [
-        { width: 400, height: 400, crop: 'fill', quality: 'auto' }
-      ]
-    });
+    // Upload avatar to R2
+    const uploadResult = await uploadAvatar(req.file.buffer, req.user._id);
 
     // Update user avatar
     const user = await User.findByIdAndUpdate(
       req.user._id,
-      { avatar: result.secure_url },
+      { avatar: uploadResult.url },
       { new: true }
     ).select('-password -refreshTokens');
 
@@ -414,7 +284,7 @@ router.post('/avatar', protect, upload.single('avatar'), async (req, res, next) 
       message: 'Avatar updated successfully',
       data: {
         user,
-        avatar: result.secure_url
+        avatar: uploadResult.url
       }
     });
   } catch (error) {
@@ -422,7 +292,7 @@ router.post('/avatar', protect, upload.single('avatar'), async (req, res, next) 
   }
 });
 
-// @desc    Delete photo from Cloudinary
+// @desc    Delete photo from R2
 // @route   DELETE /api/upload/photo/:id
 // @access  Private
 router.delete('/photo/:id', protect, validateObjectId('id'), async (req, res, next) => {
@@ -446,13 +316,17 @@ router.delete('/photo/:id', protect, validateObjectId('id'), async (req, res, ne
       });
     }
 
-    // Delete from Cloudinary
+    // Delete from R2
     try {
-      await cloudinary.uploader.destroy(photo.publicId);
-      await cloudinary.uploader.destroy(`${photo.publicId}_thumb`);
-    } catch (cloudinaryError) {
-      console.error('Cloudinary deletion error:', cloudinaryError);
-      // Continue with database deletion even if Cloudinary fails
+      // Delete main image
+      await deleteFromR2(photo.publicId);
+      
+      // Delete thumbnail (assuming it follows the same naming pattern)
+      const thumbnailKey = photo.publicId.replace('.jpg', '_thumb.jpg');
+      await deleteFromR2(thumbnailKey);
+    } catch (r2Error) {
+      console.error('R2 deletion error:', r2Error);
+      // Continue with database deletion even if R2 fails
     }
 
     // Delete from database
@@ -461,6 +335,70 @@ router.delete('/photo/:id', protect, validateObjectId('id'), async (req, res, ne
     res.json({
       success: true,
       message: 'Photo deleted successfully'
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// @desc    Get presigned upload URL
+// @route   POST /api/upload/presigned-url
+// @access  Private
+router.post('/presigned-url', protect, async (req, res, next) => {
+  try {
+    const { contentType, filename } = req.body;
+
+    if (!contentType || !filename) {
+      return res.status(400).json({
+        success: false,
+        message: 'Content type and filename are required'
+      });
+    }
+
+    // Generate unique key
+    const fileId = uuidv4();
+    const timestamp = Date.now();
+    const key = `photos/${req.user._id}/${timestamp}_${fileId}_${filename}`;
+
+    // Generate presigned URL
+    const presignedUrl = await generatePresignedUploadUrl(key, contentType, 3600); // 1 hour
+
+    res.json({
+      success: true,
+      data: {
+        presignedUrl,
+        key,
+        url: `${process.env.R2_PUBLIC_URL}/${key}`
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// @desc    Get presigned download URL
+// @route   POST /api/upload/download-url
+// @access  Private
+router.post('/download-url', protect, async (req, res, next) => {
+  try {
+    const { key, expiresIn = 3600 } = req.body;
+
+    if (!key) {
+      return res.status(400).json({
+        success: false,
+        message: 'Key is required'
+      });
+    }
+
+    // Generate presigned download URL
+    const presignedUrl = await generatePresignedDownloadUrl(key, expiresIn);
+
+    res.json({
+      success: true,
+      data: {
+        downloadUrl: presignedUrl,
+        expiresIn
+      }
     });
   } catch (error) {
     next(error);
@@ -507,6 +445,30 @@ router.get('/limits', protect, async (req, res, next) => {
           photos: userLimits.maxPhotos === Infinity ? Infinity : Math.max(0, userLimits.maxPhotos - currentUsage.photos),
           portfolios: userLimits.maxPortfolios === Infinity ? Infinity : Math.max(0, userLimits.maxPortfolios - currentUsage.portfolios)
         }
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// @desc    Get R2 configuration for frontend
+// @route   GET /api/upload/config
+// @access  Private
+router.get('/config', protect, async (req, res, next) => {
+  try {
+    const config = {
+      bucketName: process.env.R2_BUCKET_NAME,
+      publicUrl: process.env.R2_PUBLIC_URL,
+      maxFileSize: parseInt(process.env.MAX_FILE_SIZE) || 10 * 1024 * 1024,
+      allowedTypes: (process.env.ALLOWED_FILE_TYPES || 'image/jpeg,image/png,image/webp,image/gif').split(','),
+      region: process.env.R2_REGION || 'auto'
+    };
+
+    res.json({
+      success: true,
+      data: {
+        config
       }
     });
   } catch (error) {
