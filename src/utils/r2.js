@@ -16,6 +16,24 @@ const r2Client = new S3Client({
 const BUCKET_NAME = process.env.R2_BUCKET_NAME;
 const PUBLIC_URL = process.env.R2_PUBLIC_URL;
 
+// Environment-based directory structure
+const ENVIRONMENT_PREFIX = process.env.R2_ENVIRONMENT_PREFIX || process.env.NODE_ENV || 'dev';
+
+// Helper function to generate environment-aware key
+const generateKey = (folder, filename) => {
+  // Format: environment/folder/filename
+  // Examples:
+  // - dev/photos/user123/image.jpg
+  // - prod/avatars/user123/avatar.jpg
+  // - staging/cover-photos/user123/cover.jpg
+  return `${ENVIRONMENT_PREFIX}/${folder}/${filename}`;
+};
+
+// Helper function to get environment-aware URL
+const generateUrl = (key) => {
+  return `${PUBLIC_URL}/${key}`;
+};
+
 // Helper function to upload buffer to R2
 const uploadToR2 = async (buffer, key, contentType, metadata = {}) => {
   try {
@@ -31,8 +49,9 @@ const uploadToR2 = async (buffer, key, contentType, metadata = {}) => {
     return {
       success: true,
       key,
-      url: `${PUBLIC_URL}/${key}`,
+      url: generateUrl(key),
       etag: result.ETag,
+      environment: ENVIRONMENT_PREFIX,
     };
   } catch (error) {
     console.error('R2 upload error:', error);
@@ -119,8 +138,8 @@ const processAndUploadImage = async (buffer, options = {}) => {
       .jpeg({ quality })
       .toBuffer();
 
-    // Generate main image key
-    const mainImageKey = `${folder}/${userId}/${timestamp}_${fileId}.jpg`;
+    // Generate main image key with environment prefix
+    const mainImageKey = generateKey(folder, `${userId}/${timestamp}_${fileId}.jpg`);
     
     // Upload main image
     const mainImageResult = await uploadToR2(processedImage, mainImageKey, 'image/jpeg', {
@@ -144,7 +163,7 @@ const processAndUploadImage = async (buffer, options = {}) => {
         .jpeg({ quality: 80 })
         .toBuffer();
 
-      const thumbnailKey = `${folder}/${userId}/${timestamp}_${fileId}_thumb.jpg`;
+      const thumbnailKey = generateKey(folder, `${userId}/${timestamp}_${fileId}_thumb.jpg`);
       
       thumbnailResult = await uploadToR2(thumbnailBuffer, thumbnailKey, 'image/jpeg', {
         originalName: options.originalName || 'image.jpg',
@@ -240,7 +259,7 @@ const uploadAvatar = async (buffer, userId) => {
       .jpeg({ quality: 90 })
       .toBuffer();
 
-    const avatarKey = `avatars/${userId}/${timestamp}_${fileId}.jpg`;
+    const avatarKey = generateKey('avatars', `${userId}/${timestamp}_${fileId}.jpg`);
     
     const result = await uploadToR2(processedAvatar, avatarKey, 'image/jpeg', {
       userId: userId.toString(),

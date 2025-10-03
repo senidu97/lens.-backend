@@ -1,4 +1,5 @@
 const express = require('express');
+const { body } = require('express-validator');
 const Photo = require('../models/Photo');
 const Portfolio = require('../models/Portfolio');
 const { protect, optionalAuth, checkOwnership } = require('../middleware/auth');

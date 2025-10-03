@@ -355,10 +355,11 @@ router.post('/presigned-url', protect, async (req, res, next) => {
       });
     }
 
-    // Generate unique key
+    // Generate unique key with environment prefix
     const fileId = uuidv4();
     const timestamp = Date.now();
-    const key = `photos/${req.user._id}/${timestamp}_${fileId}_${filename}`;
+    const environmentPrefix = process.env.R2_ENVIRONMENT_PREFIX || process.env.NODE_ENV || 'dev';
+    const key = `${environmentPrefix}/photos/${req.user._id}/${timestamp}_${fileId}_${filename}`;
 
     // Generate presigned URL
     const presignedUrl = await generatePresignedUploadUrl(key, contentType, 3600); // 1 hour
@@ -368,7 +369,8 @@ router.post('/presigned-url', protect, async (req, res, next) => {
       data: {
         presignedUrl,
         key,
-        url: `${process.env.R2_PUBLIC_URL}/${key}`
+        url: `${process.env.R2_PUBLIC_URL}/${key}`,
+        environment: environmentPrefix
       }
     });
   } catch (error) {

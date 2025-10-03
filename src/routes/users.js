@@ -1,4 +1,5 @@
 const express = require('express');
+const { body, query } = require('express-validator');
 const User = require('../models/User');
 const Portfolio = require('../models/Portfolio');
 const Photo = require('../models/Photo');

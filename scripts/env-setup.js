@@ -71,6 +71,15 @@ async function generateEnvFile() {
   const r2Region = await question('R2 Region (default: auto): ') || 'auto';
   const r2PublicUrl = await question('R2 Public URL (e.g., https://your-bucket.your-account.r2.cloudflarestorage.com): ');
 
+  // R2 Environment Configuration
+  console.log('\n📁 R2 Directory Structure:');
+  console.log('Files will be organized by environment in your bucket:');
+  console.log('- dev/photos/, dev/avatars/, dev/cover-photos/');
+  console.log('- prod/photos/, prod/avatars/, prod/cover-photos/');
+  console.log('- staging/photos/, staging/avatars/, staging/cover-photos/');
+  
+  const environmentPrefix = await question('Environment prefix (default: dev): ') || 'dev';
+  
   // Optional R2 settings
   const useCustomDomain = await question('\nUse custom domain for CDN? (y/N): ');
   let r2CustomDomain = '';
@@ -128,6 +137,7 @@ R2_SECRET_ACCESS_KEY=${r2SecretAccessKey}
 R2_BUCKET_NAME=${r2BucketName}
 R2_REGION=${r2Region}
 R2_PUBLIC_URL=${r2PublicUrl}
+R2_ENVIRONMENT_PREFIX=${environmentPrefix}
 R2_STORAGE_CLASS=STANDARD
 R2_CACHE_CONTROL=max-age=31536000
 R2_CONTENT_DISPOSITION=inline
