@@ -51,8 +51,8 @@ async function generateEnvFile() {
       mongoUri = await question('MongoDB Atlas URI: ');
     }
   } else {
-    mongoUri = await question('MongoDB URI (default: mongodb://localhost:27017/lens-portfolio): ') || 
-      'mongodb://localhost:27017/lens-portfolio';
+    mongoUri = await question('MongoDB URI (default: mongodb://localhost:27017/lens-dev): ') || 
+      'mongodb://localhost:27017/lens-dev';
   }
 
   // JWT secrets
@@ -118,7 +118,7 @@ HOST=localhost
 # DATABASE CONFIGURATION
 # =============================================================================
 MONGODB_URI=${mongoUri}
-MONGODB_TEST_URI=mongodb://localhost:27017/lens-portfolio-test
+MONGODB_TEST_URI=mongodb://localhost:27017/lens-dev-test
 
 # =============================================================================
 # AUTHENTICATION & SECURITY
@@ -207,7 +207,7 @@ PRO_PLAN_MAX_FILE_SIZE=52428800
 DEV_AUTO_RELOAD=true
 DEV_MOCK_EMAILS=false
 DEV_SKIP_AUTH=false
-TEST_DATABASE_URI=mongodb://localhost:27017/lens-portfolio-test
+TEST_DATABASE_URI=mongodb://localhost:27017/lens-dev-test
 TEST_UPLOAD_PATH=./test-uploads
 
 # =============================================================================

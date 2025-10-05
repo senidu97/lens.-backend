@@ -129,6 +129,11 @@ const userSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
   }],
+  // User's portfolios
+  portfolios: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Portfolio'
+  }],
   // R2 specific fields for avatar
   r2: {
     avatarKey: String, // R2 key for avatar

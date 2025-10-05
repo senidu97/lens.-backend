@@ -2,6 +2,8 @@ const { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } = re
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const sharp = require('sharp');
 const { v4: uuidv4 } = require('uuid');
+const fs = require('fs');
+const path = require('path');
 
 // Configure S3 client for Cloudflare R2
 const r2Client = new S3Client({
@@ -19,6 +21,15 @@ const PUBLIC_URL = process.env.R2_PUBLIC_URL;
 // Environment-based directory structure
 const ENVIRONMENT_PREFIX = process.env.R2_ENVIRONMENT_PREFIX || process.env.NODE_ENV || 'dev';
 
+// Local storage fallback for development
+const LOCAL_UPLOADS_DIR = path.join(process.cwd(), 'uploads');
+const LOCAL_PUBLIC_URL = process.env.LOCAL_PUBLIC_URL || 'http://localhost:5000/uploads';
+
+// Ensure uploads directory exists
+if (!fs.existsSync(LOCAL_UPLOADS_DIR)) {
+  fs.mkdirSync(LOCAL_UPLOADS_DIR, { recursive: true });
+}
+
 // Helper function to generate environment-aware key
 const generateKey = (folder, filename) => {
   // Format: environment/folder/filename
@@ -34,9 +45,42 @@ const generateUrl = (key) => {
   return `${PUBLIC_URL}/${key}`;
 };
 
+// Helper function to upload to local storage (development fallback)
+const uploadToLocal = async (buffer, key, contentType, metadata = {}) => {
+  try {
+    const filePath = path.join(LOCAL_UPLOADS_DIR, key);
+    const dir = path.dirname(filePath);
+    
+    // Ensure directory exists
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    
+    // Write file
+    fs.writeFileSync(filePath, buffer);
+    
+    return {
+      success: true,
+      key,
+      url: `${LOCAL_PUBLIC_URL}/${key}`,
+      etag: `"${Date.now()}"`,
+      environment: ENVIRONMENT_PREFIX,
+    };
+  } catch (error) {
+    console.error('Local upload error:', error);
+    throw error;
+  }
+};
+
 // Helper function to upload buffer to R2
 const uploadToR2 = async (buffer, key, contentType, metadata = {}) => {
   try {
+    // Check if R2 is configured
+    if (!process.env.R2_ACCOUNT_ID || !process.env.R2_ACCESS_KEY_ID || !process.env.R2_SECRET_ACCESS_KEY) {
+      console.warn('R2 not configured, using local file storage for development');
+      return uploadToLocal(buffer, key, contentType, metadata);
+    }
+
     const command = new PutObjectCommand({
       Bucket: BUCKET_NAME,
       Key: key,

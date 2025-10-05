@@ -36,6 +36,21 @@ router.post('/register', validateUserRegistration, async (req, res, next) => {
       lastName
     });
 
+    // Create default portfolio for the user
+    const Portfolio = require('../models/Portfolio');
+    const defaultPortfolio = await Portfolio.create({
+      user: user._id,
+      title: 'My Photos',
+      description: 'My photography collection',
+      slug: `${username}-photos`,
+      isDefault: true,
+      isPublic: true
+    });
+
+    // Add portfolio to user
+    user.portfolios.push(defaultPortfolio._id);
+    await user.save();
+
     // Generate tokens
     const token = user.generateAuthToken();
     const refreshToken = user.generateRefreshToken();
