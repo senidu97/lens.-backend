@@ -123,6 +123,7 @@ router.post('/photo', protect, checkSubscriptionLimits('photos'), upload.single(
       colorPalette: uploadResult.colorPalette
     });
 
+
     // Populate photo with user and portfolio data
     await photo.populate('user', 'username avatar');
     await photo.populate('portfolio', 'title slug');
@@ -358,7 +359,7 @@ router.post('/presigned-url', protect, async (req, res, next) => {
     // Generate unique key with environment prefix
     const fileId = uuidv4();
     const timestamp = Date.now();
-    const environmentPrefix = process.env.R2_ENVIRONMENT_PREFIX || process.env.NODE_ENV || 'dev';
+    const environmentPrefix = process.env.NODE_ENV === 'production' ? 'prod' : 'dev';
     const key = `${environmentPrefix}/photos/${req.user._id}/${timestamp}_${fileId}_${filename}`;
 
     // Generate presigned URL

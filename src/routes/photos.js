@@ -3,6 +3,7 @@ const { body } = require('express-validator');
 const Photo = require('../models/Photo');
 const Portfolio = require('../models/Portfolio');
 const { protect, optionalAuth, checkOwnership } = require('../middleware/auth');
+const { generatePresignedViewUrl } = require('../utils/r2');
 const { 
   validatePhoto, 
   validateObjectId, 
@@ -87,6 +88,132 @@ router.get('/', optionalAuth, validatePagination, validateSearch, async (req, re
           limit: parseInt(limit),
           total,
           pages: Math.ceil(total / limit)
+        }
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// @desc    Get presigned URL for photo viewing
+// @route   GET /api/photos/:photoId/presigned-url
+// @access  Private
+router.get('/:photoId/presigned-url', protect, async (req, res, next) => {
+  try {
+    const photo = await Photo.findById(req.params.photoId);
+    
+    if (!photo) {
+      return res.status(404).json({
+        success: false,
+        message: 'Photo not found'
+      });
+    }
+
+    // Check if user owns the photo or it's public
+    if (photo.user.toString() !== req.user._id.toString() && !photo.isPublic) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied'
+      });
+    }
+
+    // Generate presigned URL for the main image
+    const mainImageUrl = await generatePresignedViewUrl(photo.publicId, 3600); // 1 hour
+    
+    let thumbnailUrl = null;
+    if (photo.thumbnail) {
+      // Generate presigned URL for thumbnail
+      thumbnailUrl = await generatePresignedViewUrl(photo.thumbnail, 3600);
+    }
+
+    res.json({
+      success: true,
+      data: {
+        photoId: photo._id,
+        mainImageUrl,
+        thumbnailUrl,
+        expiresIn: 3600
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// @desc    Debug route - Test photo URL accessibility
+// @route   GET /api/photos/debug/test-url/:photoId
+// @access  Private
+router.get('/debug/test-url/:photoId', protect, async (req, res, next) => {
+  try {
+    const photo = await Photo.findById(req.params.photoId)
+      .populate('user', 'username')
+      .populate('portfolio', 'title');
+
+    if (!photo) {
+      return res.status(404).json({
+        success: false,
+        message: 'Photo not found'
+      });
+    }
+
+    // Test if the photo URL is accessible
+    const testResult = {
+      photo: {
+        id: photo._id,
+        title: photo.title,
+        url: photo.url,
+        thumbnail: photo.thumbnail,
+        r2Key: photo.publicId,
+        isPublic: photo.isPublic,
+        createdAt: photo.createdAt
+      },
+      urlTest: {
+        mainUrl: photo.url,
+        thumbnailUrl: photo.thumbnail,
+        r2Key: photo.publicId,
+        environment: process.env.NODE_ENV
+      }
+    };
+
+    console.log('PHOTO URL TEST:', JSON.stringify(testResult, null, 2));
+    res.json({ success: true, data: testResult });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// @desc    Debug route - Get all photos (for troubleshooting)
+// @route   GET /api/photos/debug/all
+// @access  Private
+router.get('/debug/all', protect, async (req, res, next) => {
+  try {
+    const allPhotos = await Photo.find({})
+      .populate('user', 'username avatar')
+      .populate('portfolio', 'title slug')
+      .sort({ createdAt: -1 })
+      .limit(20);
+
+    console.log('All photos in database:', {
+      totalCount: allPhotos.length,
+      photos: allPhotos.map(p => ({
+        id: p._id,
+        userId: p.user?._id,
+        portfolioId: p.portfolio?._id,
+        portfolioTitle: p.portfolio?.title,
+        url: p.url,
+        isPublic: p.isPublic,
+        createdAt: p.createdAt
+      }))
+    });
+
+    res.json({
+      success: true,
+      data: {
+        photos: allPhotos,
+        debug: {
+          totalPhotos: allPhotos.length,
+          userPhotos: allPhotos.filter(p => p.user?._id.toString() === req.user._id.toString()).length
         }
       }
     });

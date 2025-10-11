@@ -14,6 +14,9 @@ const portfolioRoutes = require('./routes/portfolios');
 const photoRoutes = require('./routes/photos');
 const uploadRoutes = require('./routes/upload');
 
+// Import path for serving static files
+const path = require('path');
+
 // Import middleware
 const errorHandler = require('./middleware/errorHandler');
 const notFound = require('./middleware/notFound');
@@ -63,6 +66,10 @@ app.get('/health', (req, res) => {
     environment: process.env.NODE_ENV
   });
 });
+
+// Serve static files only (no user uploads stored locally)
+// This is only for static assets like logos, icons, etc.
+app.use('/static', express.static(path.join(process.cwd(), 'public')));
 
 // API routes
 app.use('/api/auth', authRoutes);

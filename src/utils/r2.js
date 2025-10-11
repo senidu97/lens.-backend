@@ -2,8 +2,6 @@ const { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } = re
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const sharp = require('sharp');
 const { v4: uuidv4 } = require('uuid');
-const fs = require('fs');
-const path = require('path');
 
 // Configure S3 client for Cloudflare R2
 const r2Client = new S3Client({
@@ -19,16 +17,8 @@ const BUCKET_NAME = process.env.R2_BUCKET_NAME;
 const PUBLIC_URL = process.env.R2_PUBLIC_URL;
 
 // Environment-based directory structure
-const ENVIRONMENT_PREFIX = process.env.R2_ENVIRONMENT_PREFIX || process.env.NODE_ENV || 'dev';
-
-// Local storage fallback for development
-const LOCAL_UPLOADS_DIR = path.join(process.cwd(), 'uploads');
-const LOCAL_PUBLIC_URL = process.env.LOCAL_PUBLIC_URL || 'http://localhost:5000/uploads';
-
-// Ensure uploads directory exists
-if (!fs.existsSync(LOCAL_UPLOADS_DIR)) {
-  fs.mkdirSync(LOCAL_UPLOADS_DIR, { recursive: true });
-}
+// Use 'dev' for development, 'prod' for production
+const ENVIRONMENT_PREFIX = process.env.NODE_ENV === 'production' ? 'prod' : 'dev';
 
 // Helper function to generate environment-aware key
 const generateKey = (folder, filename) => {
@@ -36,7 +26,6 @@ const generateKey = (folder, filename) => {
   // Examples:
   // - dev/photos/user123/image.jpg
   // - prod/avatars/user123/avatar.jpg
-  // - staging/cover-photos/user123/cover.jpg
   return `${ENVIRONMENT_PREFIX}/${folder}/${filename}`;
 };
 
@@ -45,29 +34,18 @@ const generateUrl = (key) => {
   return `${PUBLIC_URL}/${key}`;
 };
 
-// Helper function to upload to local storage (development fallback)
-const uploadToLocal = async (buffer, key, contentType, metadata = {}) => {
+// Helper function to generate presigned URL for viewing
+const generatePresignedViewUrl = async (key, expiresIn = 3600) => {
   try {
-    const filePath = path.join(LOCAL_UPLOADS_DIR, key);
-    const dir = path.dirname(filePath);
-    
-    // Ensure directory exists
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    
-    // Write file
-    fs.writeFileSync(filePath, buffer);
-    
-    return {
-      success: true,
-      key,
-      url: `${LOCAL_PUBLIC_URL}/${key}`,
-      etag: `"${Date.now()}"`,
-      environment: ENVIRONMENT_PREFIX,
-    };
+    const command = new GetObjectCommand({
+      Bucket: BUCKET_NAME,
+      Key: key,
+    });
+
+    const presignedUrl = await getSignedUrl(r2Client, command, { expiresIn });
+    return presignedUrl;
   } catch (error) {
-    console.error('Local upload error:', error);
+    console.error('Error generating presigned view URL:', error);
     throw error;
   }
 };
@@ -75,12 +53,6 @@ const uploadToLocal = async (buffer, key, contentType, metadata = {}) => {
 // Helper function to upload buffer to R2
 const uploadToR2 = async (buffer, key, contentType, metadata = {}) => {
   try {
-    // Check if R2 is configured
-    if (!process.env.R2_ACCOUNT_ID || !process.env.R2_ACCESS_KEY_ID || !process.env.R2_SECRET_ACCESS_KEY) {
-      console.warn('R2 not configured, using local file storage for development');
-      return uploadToLocal(buffer, key, contentType, metadata);
-    }
-
     const command = new PutObjectCommand({
       Bucket: BUCKET_NAME,
       Key: key,
@@ -194,12 +166,14 @@ const processAndUploadImage = async (buffer, options = {}) => {
       height: metadata.height.toString(),
     });
 
+
     let thumbnailResult = null;
     let colorPalette = [];
+    let thumbnailBuffer = null;
 
     // Generate thumbnail if requested
     if (generateThumbnail) {
-      const thumbnailBuffer = await sharp(buffer)
+      thumbnailBuffer = await sharp(buffer)
         .resize(thumbnailSize, thumbnailSize, {
           fit: 'cover',
           position: 'center',
@@ -216,6 +190,7 @@ const processAndUploadImage = async (buffer, options = {}) => {
         width: thumbnailSize.toString(),
         height: thumbnailSize.toString(),
       });
+
     }
 
     // Extract dominant colors if requested
@@ -238,7 +213,7 @@ const processAndUploadImage = async (buffer, options = {}) => {
         url: thumbnailResult.url,
         width: thumbnailSize,
         height: thumbnailSize,
-        size: thumbnailBuffer.length,
+        size: thumbnailBuffer ? thumbnailBuffer.length : 0,
         format: 'jpg',
       } : null,
       colorPalette,
@@ -384,6 +359,7 @@ module.exports = {
   uploadToR2,
   deleteFromR2,
   generatePresignedUploadUrl,
+  generatePresignedViewUrl,
   generatePresignedDownloadUrl,
   processAndUploadImage,
   extractDominantColors,

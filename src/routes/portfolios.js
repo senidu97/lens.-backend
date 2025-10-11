@@ -2,6 +2,7 @@ const express = require('express');
 const Portfolio = require('../models/Portfolio');
 const Photo = require('../models/Photo');
 const { protect, optionalAuth, checkOwnership } = require('../middleware/auth');
+const { generatePresignedViewUrl } = require('../utils/r2');
 const { 
   validatePortfolio, 
   validatePortfolioUpdate, 
@@ -92,12 +93,59 @@ router.get('/', optionalAuth, validatePagination, validateSearch, async (req, re
   }
 });
 
+// @desc    Debug route - Test portfolios response structure
+// @route   GET /api/portfolios/debug/test
+// @access  Private
+router.get('/debug/test', protect, async (req, res, next) => {
+  try {
+    const portfolios = await Portfolio.find({ user: req.user._id })
+      .populate('user', 'username avatar')
+      .sort({ createdAt: -1 })
+      .limit(5);
+
+    // Populate photos for each portfolio
+    for (let portfolio of portfolios) {
+      const photos = await Photo.findByPortfolio(portfolio._id, {
+        isPublic: portfolio.isPublic ? true : null,
+        limit: 10
+      });
+      portfolio.photos = photos;
+    }
+
+    // Return a simplified response for testing
+    const testResponse = {
+      success: true,
+      data: {
+        portfolios: portfolios.map(p => ({
+          id: p._id,
+          title: p.title,
+          slug: p.slug,
+          isDefault: p.isDefault,
+          photosCount: p.photos ? p.photos.length : 0,
+          photos: p.photos ? p.photos.map(photo => ({
+            id: photo._id,
+            title: photo.title,
+            url: photo.url,
+            thumbnail: photo.thumbnail,
+            isPublic: photo.isPublic
+          })) : []
+        }))
+      }
+    };
+
+    console.log('DEBUG TEST RESPONSE:', JSON.stringify(testResponse, null, 2));
+    res.json(testResponse);
+  } catch (error) {
+    next(error);
+  }
+});
+
 // @desc    Get user's portfolios
 // @route   GET /api/portfolios/my
 // @access  Private
 router.get('/my', protect, validatePagination, async (req, res, next) => {
   try {
-    const { page = 1, limit = 20 } = req.query;
+    const { page = 1, limit = 20, includePhotos = true } = req.query;
     const skip = (page - 1) * limit;
 
     const portfolios = await Portfolio.find({ user: req.user._id })
@@ -105,6 +153,46 @@ router.get('/my', protect, validatePagination, async (req, res, next) => {
       .sort({ createdAt: -1 })
       .limit(parseInt(limit))
       .skip(skip);
+
+    // If includePhotos is true, populate photos for each portfolio
+    if (includePhotos === 'true' || includePhotos === true) {
+      // Convert portfolios to plain objects to allow adding custom properties
+      const portfoliosWithPhotos = [];
+      
+      for (let portfolio of portfolios) {
+        const photos = await Photo.findByPortfolio(portfolio._id, {
+          isPublic: null, // Get all photos regardless of public status for portfolio owner
+          limit: 50, // Limit photos per portfolio for list view
+          sort: { order: 1, createdAt: -1 }
+        });
+        
+        // Convert portfolio to plain object and add photos with presigned URLs
+        const portfolioObj = portfolio.toObject();
+        
+        // Generate presigned URLs for each photo
+        const photosWithPresignedUrls = await Promise.all(photos.map(async (photo) => {
+          try {
+            const presignedUrl = await generatePresignedViewUrl(photo.publicId, 3600); // 1 hour
+            return {
+              ...photo.toObject(),
+              url: presignedUrl, // Replace the direct URL with presigned URL
+              originalUrl: photo.url // Keep original URL for reference
+            };
+          } catch (error) {
+            console.error(`Error generating presigned URL for photo ${photo._id}:`, error);
+            return photo.toObject(); // Fallback to original photo if presigned URL fails
+          }
+        }));
+        
+        portfolioObj.photos = photosWithPresignedUrls;
+        
+        portfoliosWithPhotos.push(portfolioObj);
+      }
+      
+      // Replace the original portfolios array with the one that has photos
+      portfolios.length = 0;
+      portfolios.push(...portfoliosWithPhotos);
+    }
 
     const total = await Portfolio.countDocuments({ user: req.user._id });
 
@@ -118,6 +206,62 @@ router.get('/my', protect, validatePagination, async (req, res, next) => {
           total,
           pages: Math.ceil(total / limit)
         }
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// @desc    Get or create default portfolio
+// @route   GET /api/portfolios/default
+// @access  Private
+router.get('/default', protect, async (req, res, next) => {
+  try {
+    // First, try to find an existing default portfolio
+    let portfolio = await Portfolio.findOne({ 
+      user: req.user._id, 
+      isDefault: true 
+    });
+
+    // If no default portfolio exists, create one
+    if (!portfolio) {
+      const existingCount = await Portfolio.countDocuments({ user: req.user._id });
+      
+      if (existingCount === 0) {
+        // Create the first portfolio as default
+        portfolio = await Portfolio.create({
+          user: req.user._id,
+          title: `${req.user.username}'s Portfolio`,
+          description: 'My photography portfolio',
+          slug: `${req.user.username}-portfolio-${Date.now()}`,
+          isDefault: true,
+          isPublic: true,
+          category: 'other'
+        });
+      } else {
+        // Set the first existing portfolio as default
+        portfolio = await Portfolio.findOne({ user: req.user._id }).sort('createdAt');
+        if (portfolio) {
+          portfolio.isDefault = true;
+          await portfolio.save();
+        }
+      }
+    }
+
+    if (!portfolio) {
+      return res.status(404).json({
+        success: false,
+        message: 'No portfolio found'
+      });
+    }
+
+    await portfolio.populate('user', 'username avatar');
+
+    res.json({
+      success: true,
+      data: {
+        portfolio
       }
     });
   } catch (error) {

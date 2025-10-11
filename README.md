@@ -207,16 +207,28 @@ R2_REGION=auto
 ### Storage Structure
 ```
 bucket/
-├── photos/
-│   └── {userId}/
-│       ├── {timestamp}_{fileId}.jpg
-│       └── {timestamp}_{fileId}_thumb.jpg
-├── avatars/
-│   └── {userId}/
-│       └── {timestamp}_{fileId}.jpg
-└── cover-photos/
-    └── {userId}/
-        └── {timestamp}_{fileId}.jpg
+├── dev/                    # Development environment
+│   ├── photos/
+│   │   └── {userId}/
+│   │       ├── {timestamp}_{fileId}.jpg
+│   │       └── {timestamp}_{fileId}_thumb.jpg
+│   ├── avatars/
+│   │   └── {userId}/
+│   │       └── {timestamp}_{fileId}.jpg
+│   └── cover-photos/
+│       └── {userId}/
+│           └── {timestamp}_{fileId}.jpg
+└── prod/                   # Production environment
+    ├── photos/
+    │   └── {userId}/
+    │       ├── {timestamp}_{fileId}.jpg
+    │       └── {timestamp}_{fileId}_thumb.jpg
+    ├── avatars/
+    │   └── {userId}/
+    │       └── {timestamp}_{fileId}.jpg
+    └── cover-photos/
+        └── {userId}/
+            └── {timestamp}_{fileId}.jpg
 ```
 
 ### CDN Integration
@@ -311,9 +323,10 @@ Ensure all required environment variables are set in production:
 
 ### File Organization
 - Use consistent naming conventions
-- Organize files by user and type
+- Organize files by environment (dev/prod), user and type
 - Include timestamps for uniqueness
 - Store metadata in database, not file names
+- All user uploads go directly to R2 (no local storage)
 
 ### Performance
 - Use appropriate image sizes
