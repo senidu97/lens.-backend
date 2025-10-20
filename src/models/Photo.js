@@ -91,7 +91,27 @@ const photoSchema = new mongoose.Schema({
   },
   isPublic: {
     type: Boolean,
-    default: true
+    default: false // Changed to false - photos need admin approval
+  },
+  approvalStatus: {
+    type: String,
+    enum: ['pending', 'approved', 'rejected'],
+    default: 'pending'
+  },
+  adminReview: {
+    reviewedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    reviewedAt: Date,
+    rejectionReason: {
+      type: String,
+      maxlength: [500, 'Rejection reason cannot exceed 500 characters']
+    },
+    adminNotes: {
+      type: String,
+      maxlength: [1000, 'Admin notes cannot exceed 1000 characters']
+    }
   },
   isFeatured: {
     type: Boolean,
@@ -194,6 +214,7 @@ const photoSchema = new mongoose.Schema({
 photoSchema.index({ user: 1 });
 photoSchema.index({ portfolio: 1 });
 photoSchema.index({ isPublic: 1 });
+photoSchema.index({ approvalStatus: 1 });
 photoSchema.index({ tags: 1 });
 photoSchema.index({ category: 1 });
 photoSchema.index({ 'analytics.views': -1 });
@@ -201,6 +222,7 @@ photoSchema.index({ 'analytics.likes': -1 });
 photoSchema.index({ createdAt: -1 });
 photoSchema.index({ order: 1 });
 photoSchema.index({ publicId: 1 }); // Index for R2 key lookups
+photoSchema.index({ 'adminReview.reviewedBy': 1 });
 
 // Virtual for aspect ratio
 photoSchema.virtual('aspectRatio').get(function() {
@@ -332,7 +354,7 @@ photoSchema.methods.getCDNUrl = function(transformations = {}) {
 
 // Static method to find public photos
 photoSchema.statics.findPublic = function() {
-  return this.find({ isPublic: true }).populate('user', 'username avatar');
+  return this.find({ isPublic: true, approvalStatus: 'approved' }).populate('user', 'username avatar');
 };
 
 // Static method to find by portfolio
@@ -347,6 +369,9 @@ photoSchema.statics.findByPortfolio = function(portfolioId, options = {}) {
   const query = { portfolio: portfolioId };
   if (isPublic !== null) {
     query.isPublic = isPublic;
+    if (isPublic) {
+      query.approvalStatus = 'approved';
+    }
   }
 
   return this.find(query)
@@ -370,6 +395,9 @@ photoSchema.statics.search = function(query, options = {}) {
   } = options;
 
   const searchQuery = { isPublic };
+  if (isPublic) {
+    searchQuery.approvalStatus = 'approved';
+  }
 
   if (query) {
     searchQuery.$or = [
@@ -405,7 +433,7 @@ photoSchema.statics.search = function(query, options = {}) {
 
 // Static method to get featured photos
 photoSchema.statics.findFeatured = function(limit = 10) {
-  return this.find({ isPublic: true, isFeatured: true })
+  return this.find({ isPublic: true, isFeatured: true, approvalStatus: 'approved' })
     .populate('user', 'username avatar')
     .populate('portfolio', 'title slug')
     .sort({ 'analytics.views': -1 })
@@ -419,6 +447,7 @@ photoSchema.statics.findTrending = function(limit = 10, days = 7) {
 
   return this.find({
     isPublic: true,
+    approvalStatus: 'approved',
     createdAt: { $gte: date }
   })
     .populate('user', 'username avatar')
@@ -435,6 +464,76 @@ photoSchema.statics.findByR2Key = function(key) {
 // Static method to get photos by R2 keys (batch lookup)
 photoSchema.statics.findByR2Keys = function(keys) {
   return this.find({ publicId: { $in: keys } });
+};
+
+// Static method to find photos pending approval
+photoSchema.statics.findPendingApproval = function(options = {}) {
+  const {
+    limit = 50,
+    skip = 0,
+    sort = { createdAt: -1 }
+  } = options;
+
+  return this.find({ approvalStatus: 'pending' })
+    .populate('user', 'username avatar email')
+    .populate('portfolio', 'title slug')
+    .sort(sort)
+    .limit(limit)
+    .skip(skip);
+};
+
+// Static method to find photos by approval status
+photoSchema.statics.findByApprovalStatus = function(status, options = {}) {
+  const {
+    limit = 50,
+    skip = 0,
+    sort = { createdAt: -1 }
+  } = options;
+
+  return this.find({ approvalStatus: status })
+    .populate('user', 'username avatar email')
+    .populate('portfolio', 'title slug')
+    .populate('adminReview.reviewedBy', 'username')
+    .sort(sort)
+    .limit(limit)
+    .skip(skip);
+};
+
+// Static method to get approval statistics
+photoSchema.statics.getApprovalStats = function() {
+  return this.aggregate([
+    {
+      $group: {
+        _id: '$approvalStatus',
+        count: { $sum: 1 }
+      }
+    }
+  ]);
+};
+
+// Instance method to approve photo
+photoSchema.methods.approve = function(adminId, notes = '') {
+  this.approvalStatus = 'approved';
+  this.isPublic = true;
+  this.adminReview = {
+    reviewedBy: adminId,
+    reviewedAt: new Date(),
+    adminNotes: notes
+  };
+  return this.save();
+};
+
+// Instance method to reject photo
+photoSchema.methods.reject = function(adminId, reason, notes = '') {
+  this.approvalStatus = 'rejected';
+  this.isPublic = false;
+  this.adminReview = {
+    reviewedBy: adminId,
+    reviewedAt: new Date(),
+    rejectionReason: reason,
+    adminNotes: notes
+  };
+  return this.save();
 };
 
 module.exports = mongoose.model('Photo', photoSchema);

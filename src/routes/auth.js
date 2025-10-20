@@ -123,6 +123,9 @@ router.post('/login', validateUserLogin, async (req, res, next) => {
     user.lastLogin = new Date();
     await user.save();
 
+    // Get actual photo count from database
+    const actualPhotoCount = await user.getActualPhotoCount();
+
     // Generate tokens
     const token = user.generateAuthToken();
     const refreshToken = user.generateRefreshToken();
@@ -144,9 +147,13 @@ router.post('/login', validateUserLogin, async (req, res, next) => {
           firstName: user.firstName,
           lastName: user.lastName,
           avatar: user.avatar,
+          role: user.role,
           subscription: user.subscription,
           isVerified: user.isVerified,
-          stats: user.stats
+          stats: {
+            ...user.stats,
+            totalPhotos: actualPhotoCount // Use actual count from database
+          }
         },
         token,
         refreshToken
@@ -248,10 +255,22 @@ router.get('/me', protect, async (req, res, next) => {
       .populate('portfolios', 'title slug isPublic createdAt')
       .select('-password -refreshTokens');
 
+    // Get actual photo count from database
+    const actualPhotoCount = await user.getActualPhotoCount();
+
+    // Update the user object with actual photo count
+    const userWithActualStats = {
+      ...user.toObject(),
+      stats: {
+        ...user.stats,
+        totalPhotos: actualPhotoCount
+      }
+    };
+
     res.json({
       success: true,
       data: {
-        user
+        user: userWithActualStats
       }
     });
   } catch (error) {
@@ -396,7 +415,7 @@ router.delete('/me', protect, [
     }
 
     // Delete user (this will trigger pre-remove middleware)
-    await user.remove();
+    await user.deleteOne();
 
     // Clear token cookie
     res.clearCookie('token');

@@ -52,30 +52,39 @@ router.post('/photo', protect, checkSubscriptionLimits('photos'), upload.single(
       });
     }
 
-    const { portfolioId, title, description, tags, category, isPublic = true } = req.body;
+    const { portfolioId, title, description, tags, category, isPublic = false } = req.body;
 
-    // Validate portfolio ID
-    if (!portfolioId) {
-      return res.status(400).json({
-        success: false,
-        message: 'Portfolio ID is required'
-      });
-    }
+    // Handle portfolio ID - create default portfolio if none provided
+    let portfolio;
+    if (portfolioId && portfolioId !== 'null' && portfolioId !== 'undefined' && portfolioId.trim() !== '' && portfolioId !== null) {
+      // Check if portfolio exists and user owns it
+      portfolio = await Portfolio.findById(portfolioId);
+      if (!portfolio) {
+        return res.status(404).json({
+          success: false,
+          message: 'Portfolio not found'
+        });
+      }
 
-    // Check if portfolio exists and user owns it
-    const portfolio = await Portfolio.findById(portfolioId);
-    if (!portfolio) {
-      return res.status(404).json({
-        success: false,
-        message: 'Portfolio not found'
-      });
-    }
-
-    if (portfolio.user.toString() !== req.user._id.toString()) {
-      return res.status(403).json({
-        success: false,
-        message: 'Not authorized to upload to this portfolio'
-      });
+      if (portfolio.user.toString() !== req.user._id.toString()) {
+        return res.status(403).json({
+          success: false,
+          message: 'Not authorized to upload to this portfolio'
+        });
+      }
+    } else {
+      // Create or get default portfolio
+      portfolio = await Portfolio.findOne({ user: req.user._id, isDefault: true });
+      if (!portfolio) {
+        portfolio = await Portfolio.create({
+          user: req.user._id,
+          title: 'Default Portfolio',
+          slug: `default-${req.user.username}-${Date.now()}`,
+          description: 'Default portfolio for uploaded photos',
+          isDefault: true,
+          isPublic: true
+        });
+      }
     }
 
     // Check if user can upload more photos
@@ -105,7 +114,7 @@ router.post('/photo', protect, checkSubscriptionLimits('photos'), upload.single(
     // Create photo record
     const photo = await Photo.create({
       user: req.user._id,
-      portfolio: portfolioId,
+      portfolio: portfolio._id,
       title: title || req.file.originalname.split('.')[0],
       description,
       url: uploadResult.mainImage.url,
@@ -120,8 +129,11 @@ router.post('/photo', protect, checkSubscriptionLimits('photos'), upload.single(
       tags: tagArray,
       category: category || 'other',
       isPublic,
-      colorPalette: uploadResult.colorPalette
+      colorPalette: uploadResult.colorPalette,
+      approvalStatus: 'pending' // Set to pending for review
     });
+
+    console.log('Photo created with approvalStatus:', photo.approvalStatus, 'Photo ID:', photo._id);
 
 
     // Populate photo with user and portfolio data
@@ -152,7 +164,7 @@ router.post('/photos', protect, checkSubscriptionLimits('photos'), upload.array(
       });
     }
 
-    const { portfolioId, isPublic = true } = req.body;
+    const { portfolioId, isPublic = false } = req.body;
 
     // Validate portfolio ID
     if (!portfolioId) {
@@ -226,7 +238,8 @@ router.post('/photos', protect, checkSubscriptionLimits('photos'), upload.array(
           },
           isPublic,
           colorPalette: uploadResult.colorPalette,
-          order: i
+          order: i,
+          approvalStatus: 'pending' // Set to pending for review
         });
 
         uploadedPhotos.push(photo);
@@ -331,7 +344,7 @@ router.delete('/photo/:id', protect, validateObjectId('id'), async (req, res, ne
     }
 
     // Delete from database
-    await photo.remove();
+    await photo.deleteOne();
 
     res.json({
       success: true,

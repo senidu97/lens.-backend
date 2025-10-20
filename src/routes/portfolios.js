@@ -440,7 +440,7 @@ router.delete('/:id', protect, validateObjectId('id'), async (req, res, next) =>
       });
     }
 
-    await portfolio.remove();
+    await portfolio.deleteOne();
 
     res.json({
       success: true,

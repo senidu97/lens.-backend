@@ -62,6 +62,11 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  role: {
+    type: String,
+    enum: ['user', 'admin', 'super_admin'],
+    default: 'user'
+  },
   subscription: {
     plan: {
       type: String,
@@ -259,6 +264,41 @@ userSchema.methods.getAvatarCDNUrl = function(transformations = {}) {
   return params.toString() ? `${this.avatar}?${params.toString()}` : this.avatar;
 };
 
+// Instance method to get actual photo count from database (only approved photos)
+userSchema.methods.getActualPhotoCount = async function() {
+  const Photo = require('./Photo');
+  return await Photo.countDocuments({ user: this._id, approvalStatus: 'approved' });
+};
+
+// Instance method to get photo count by status
+userSchema.methods.getPhotoCountByStatus = async function(status = null) {
+  const Photo = require('./Photo');
+  const query = { user: this._id };
+  if (status) {
+    query.approvalStatus = status;
+  }
+  return await Photo.countDocuments(query);
+};
+
+// Instance method to get all photo statistics
+userSchema.methods.getPhotoStats = async function() {
+  const Photo = require('./Photo');
+  
+  const [total, pending, approved, rejected] = await Promise.all([
+    Photo.countDocuments({ user: this._id }),
+    Photo.countDocuments({ user: this._id, approvalStatus: 'pending' }),
+    Photo.countDocuments({ user: this._id, approvalStatus: 'approved' }),
+    Photo.countDocuments({ user: this._id, approvalStatus: 'rejected' })
+  ]);
+  
+  return {
+    total,
+    pending,
+    approved,
+    rejected
+  };
+};
+
 // Static method to find user by email or username
 userSchema.statics.findByEmailOrUsername = function(identifier) {
   return this.findOne({
@@ -272,6 +312,17 @@ userSchema.statics.findByEmailOrUsername = function(identifier) {
 // Static method to find users by R2 avatar keys
 userSchema.statics.findByAvatarKeys = function(keys) {
   return this.find({ 'r2.avatarKey': { $in: keys } });
+};
+
+// Static method to recalculate user stats
+userSchema.statics.recalculateStats = async function(userId) {
+  const Photo = require('./Photo');
+  
+  const actualPhotoCount = await Photo.countDocuments({ user: userId });
+  
+  return this.findByIdAndUpdate(userId, {
+    $set: { 'stats.totalPhotos': actualPhotoCount }
+  }, { new: true });
 };
 
 // Pre-remove middleware to clean up related data

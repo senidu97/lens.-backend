@@ -66,6 +66,7 @@ router.get('/', optionalAuth, validatePagination, validateSearch, async (req, re
 
     const total = await Photo.countDocuments({
       isPublic: true,
+      approvalStatus: 'approved',
       ...(query && {
         $or: [
           { title: { $regex: query, $options: 'i' } },
@@ -123,8 +124,27 @@ router.get('/:photoId/presigned-url', protect, async (req, res, next) => {
     
     let thumbnailUrl = null;
     if (photo.thumbnail) {
+      // Extract key from thumbnail URL if it's a full URL
+      let thumbnailKey = photo.thumbnail;
+      if (photo.thumbnail.startsWith('http')) {
+        // Extract key from URL: https://domain.com/bucket/key -> key
+        // Example: https://domain.com/dev/photos/user123/image_thumb.jpg -> dev/photos/user123/image_thumb.jpg
+        const urlParts = photo.thumbnail.split('/');
+        // Find the bucket name and get everything after it
+        const bucketIndex = urlParts.findIndex(part => part.includes('lensbucket'));
+        if (bucketIndex !== -1 && bucketIndex + 1 < urlParts.length) {
+          thumbnailKey = urlParts.slice(bucketIndex + 1).join('/');
+        } else {
+          // Fallback: get last two parts
+          thumbnailKey = urlParts.slice(-2).join('/');
+        }
+      }
+      
+      console.log('Thumbnail URL:', photo.thumbnail);
+      console.log('Extracted thumbnail key:', thumbnailKey);
+      
       // Generate presigned URL for thumbnail
-      thumbnailUrl = await generatePresignedViewUrl(photo.thumbnail, 3600);
+      thumbnailUrl = await generatePresignedViewUrl(thumbnailKey, 3600);
     }
 
     res.json({
@@ -227,22 +247,32 @@ router.get('/debug/all', protect, async (req, res, next) => {
 // @access  Private
 router.get('/my', protect, validatePagination, async (req, res, next) => {
   try {
-    const { page = 1, limit = 20, portfolio: portfolioId } = req.query;
+    const { page = 1, limit = 20, portfolio: portfolioId, approvalStatus } = req.query;
     const skip = (page - 1) * limit;
+
+    console.log('Photos /my route called with:', { page, limit, portfolioId, approvalStatus, userId: req.user._id });
 
     const query = { user: req.user._id };
     if (portfolioId) {
       query.portfolio = portfolioId;
     }
+    if (approvalStatus) {
+      query.approvalStatus = approvalStatus;
+    }
+
+    console.log('Query:', query);
 
     const photos = await Photo.find(query)
       .populate('user', 'username avatar')
       .populate('portfolio', 'title slug')
+      .populate('adminReview.reviewedBy', 'username')
       .sort({ createdAt: -1 })
       .limit(parseInt(limit))
       .skip(skip);
 
     const total = await Photo.countDocuments(query);
+
+    console.log('Found photos:', photos.length, 'Total:', total);
 
     res.json({
       success: true,
@@ -257,6 +287,7 @@ router.get('/my', protect, validatePagination, async (req, res, next) => {
       }
     });
   } catch (error) {
+    console.error('Error in photos /my route:', error);
     next(error);
   }
 });
@@ -414,7 +445,7 @@ router.delete('/:id', protect, validateObjectId('id'), async (req, res, next) =>
       });
     }
 
-    await photo.remove();
+    await photo.deleteOne();
 
     res.json({
       success: true,
