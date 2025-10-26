@@ -123,28 +123,23 @@ router.get('/:photoId/presigned-url', protect, async (req, res, next) => {
     const mainImageUrl = await generatePresignedViewUrl(photo.publicId, 3600); // 1 hour
     
     let thumbnailUrl = null;
-    if (photo.thumbnail) {
-      // Extract key from thumbnail URL if it's a full URL
-      let thumbnailKey = photo.thumbnail;
-      if (photo.thumbnail.startsWith('http')) {
-        // Extract key from URL: https://domain.com/bucket/key -> key
-        // Example: https://domain.com/dev/photos/user123/image_thumb.jpg -> dev/photos/user123/image_thumb.jpg
-        const urlParts = photo.thumbnail.split('/');
-        // Find the bucket name and get everything after it
-        const bucketIndex = urlParts.findIndex(part => part.includes('lensbucket'));
-        if (bucketIndex !== -1 && bucketIndex + 1 < urlParts.length) {
-          thumbnailKey = urlParts.slice(bucketIndex + 1).join('/');
-        } else {
-          // Fallback: get last two parts
-          thumbnailKey = urlParts.slice(-2).join('/');
-        }
+    if (photo.thumbnail && photo.publicId) {
+      // Generate thumbnail key from publicId
+      // Thumbnail follows the pattern: original_key_thumb.jpg
+      const thumbnailKey = photo.publicId.replace('.jpg', '_thumb.jpg').replace('.jpeg', '_thumb.jpg').replace('.png', '_thumb.jpg');
+      
+      console.log('Original publicId:', photo.publicId);
+      console.log('Generated thumbnail key:', thumbnailKey);
+      
+      try {
+        // Generate presigned URL for thumbnail
+        thumbnailUrl = await generatePresignedViewUrl(thumbnailKey, 3600);
+        console.log('Successfully generated presigned thumbnail URL');
+      } catch (error) {
+        console.error('Failed to generate thumbnail presigned URL:', error);
+        // If thumbnail fails, try to use the main image URL from database
+        thumbnailUrl = photo.thumbnail;
       }
-      
-      console.log('Thumbnail URL:', photo.thumbnail);
-      console.log('Extracted thumbnail key:', thumbnailKey);
-      
-      // Generate presigned URL for thumbnail
-      thumbnailUrl = await generatePresignedViewUrl(thumbnailKey, 3600);
     }
 
     res.json({

@@ -42,6 +42,26 @@ router.get('/photos/pending', protect, canReviewPhotos, validatePagination, asyn
   }
 });
 
+// @desc    Get recent submissions
+// @route   GET /api/admin/photos/recent-submissions
+// @access  Admin
+router.get('/photos/recent-submissions', protect, canReviewPhotos, async (req, res, next) => {
+  try {
+    const recentPhotos = await Photo.find({ approvalStatus: 'pending' })
+      .populate('user', 'username avatar email')
+      .populate('portfolio', 'title slug')
+      .sort({ createdAt: -1 })
+      .limit(5);
+
+    res.json({
+      success: true,
+      data: recentPhotos
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // @desc    Get photos by approval status
 // @route   GET /api/admin/photos/status/:status
 // @access  Admin
@@ -680,6 +700,61 @@ router.get('/dashboard', protect, requireAdmin, async (req, res, next) => {
           photos: recentPhotos,
           users: recentUsers
         }
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// @desc    Get photo statistics
+// @route   GET /api/admin/stats/photos
+// @access  Admin
+router.get('/stats/photos', protect, requireAdmin, async (req, res, next) => {
+  try {
+    const [approvalStats, totalPhotos] = await Promise.all([
+      Photo.getApprovalStats(),
+      Photo.countDocuments()
+    ]);
+
+    // Convert approval stats to object
+    const statsObj = {
+      totalPhotos: totalPhotos,
+      pendingPhotos: 0,
+      approvedPhotos: 0,
+      rejectedPhotos: 0
+    };
+
+    approvalStats.forEach(stat => {
+      if (stat._id === 'pending') statsObj.pendingPhotos = stat.count;
+      if (stat._id === 'approved') statsObj.approvedPhotos = stat.count;
+      if (stat._id === 'rejected') statsObj.rejectedPhotos = stat.count;
+    });
+
+    res.json({
+      success: true,
+      data: statsObj
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// @desc    Get user statistics
+// @route   GET /api/admin/stats/users
+// @access  Admin
+router.get('/stats/users', protect, requireAdmin, async (req, res, next) => {
+  try {
+    const [totalUsers, totalAdmins] = await Promise.all([
+      User.countDocuments({ role: 'user' }),
+      User.countDocuments({ role: { $in: ['admin', 'super_admin'] } })
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        totalUsers,
+        totalAdmins
       }
     });
   } catch (error) {
